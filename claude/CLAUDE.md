@@ -23,6 +23,20 @@ Apply these rules whenever writing or modifying Python code.
 - If a helper looks wrong or is missing something generally useful, say so instead of
   silently working around it.
 
+## Trusted libraries before custom code
+
+- For anything gfp_prog_tools does not cover, if numpy, pandas or scipy already implement
+  it, call their function directly instead of re-implementing it (e.g. `np.interp`,
+  `np.polyfit`, `pd.DataFrame.rolling`, `scipy.stats.t.interval`, `scipy.signal.savgol_filter`,
+  `scipy.integrate.trapezoid`, `scipy.optimize.curve_fit`).
+- Add a comment above or beside each such call explaining what the function does and
+  what its key arguments mean. Example:
+  ```python
+  # scipy.signal.savgol_filter: smooths the signal by fitting a polynomial of order
+  # polyorder over a sliding window of window_length points
+  disp_smooth = savgol_filter(disp, window_length=11, polyorder=3)  # smoothed displacement
+  ```
+
 ## Comments and docstrings
 
 - Inline comment on every line that introduces a new variable, briefly saying what it is

@@ -301,11 +301,12 @@ def Calculate_student_t_confidence_interval(mean, std, n, ci=0.95):
         [lower, upper] bounds.
     """
     sem = std/np.sqrt(n)  # standard error of the mean
-    # Two-sided Student t critical value with n-1 degrees of freedom:
-    #   t* = t_{(1+ci)/2, n-1}   (e.g. ci=0.95, n=10 -> t* = 2.262)
-    t_crit = t.ppf((1+ci)/2, df=np.asarray(n)-1)
-    d = t_crit*sem  # half-width: t* × s/√n
-    err = np.array([mean-d, mean+d], dtype=float)  # [lower, upper]
+    # Student t interval with n-1 degrees of freedom: mean ± t_{(1+ci)/2, n-1} × s/√n
+    # (e.g. ci=0.95, n=10 -> t_{0.975, 9} = 2.262)
+    # scipy.stats.t.interval returns the bounds containing a probability ci of a
+    # t distribution with df degrees of freedom, centred on loc and scaled by scale
+    err = np.array(t.interval(ci, df=np.asarray(n)-1, loc=mean, scale=sem), dtype=float)  # [lower, upper]
+    d = (err[1]-err[0])/2  # half-width: mean ± d
     return d, err
 
 
@@ -334,10 +335,11 @@ def Calculate_normal_confidence_interval(mean, std, n, ci=0.95):
         [lower, upper] bounds.
     """
     sem = std/np.sqrt(n)  # standard error of the mean
-    # Two-sided normal critical value: z* = Φ⁻¹((1+ci)/2)   (ci=0.95 -> z* = 1.960)
-    z_crit = norm.ppf((1+ci)/2)
-    d = z_crit*sem  # half-width: z* × σ/√n
-    err = np.array([mean-d, mean+d], dtype=float)  # [lower, upper]
+    # Normal interval: mean ± z_{(1+ci)/2} × σ/√n   (ci=0.95 -> z_{0.975} = 1.960)
+    # scipy.stats.norm.interval returns the bounds containing a probability ci of a
+    # normal distribution with mean loc and standard deviation scale
+    err = np.array(norm.interval(ci, loc=mean, scale=sem), dtype=float)  # [lower, upper]
+    d = (err[1]-err[0])/2  # half-width: mean ± d
     return d, err
 
 
@@ -407,10 +409,10 @@ def Calculate_student_t_confidence_interval_curve_fit(popt, pcov, n, ci=0.95):
     popt = np.asarray(popt, dtype=float)  # fitted parameters
     se = np.sqrt(np.diag(pcov))  # standard error of each parameter (already a standard error: no further /√n)
     dof = n-popt.size  # residual degrees of freedom: data points - fitted parameters
-    # Two-sided Student t critical value: t* = t_{(1+ci)/2, n-p}
-    t_crit = t.ppf((1+ci)/2, df=dof)
-    d = t_crit*se  # half-width: t* × SE(θ_i)
-    err = np.column_stack((popt-d, popt+d))  # [lower, upper] per parameter
+    # Student t interval on each parameter: θ_i ± t_{(1+ci)/2, n-p} × SE(θ_i)
+    # scipy.stats.t.interval returns (lower, upper) arrays, one value per parameter
+    err = np.column_stack(t.interval(ci, df=dof, loc=popt, scale=se))  # [lower, upper] per parameter
+    d = (err[:, 1]-err[:, 0])/2  # half-width: popt[i] ± d[i]
     return d, err
 
 
@@ -440,10 +442,10 @@ def Calculate_normal_confidence_interval_curve_fit(popt, pcov, ci=0.95):
     """
     popt = np.asarray(popt, dtype=float)  # fitted parameters
     se = np.sqrt(np.diag(pcov))  # standard error of each parameter
-    # Two-sided normal critical value: z* = Φ⁻¹((1+ci)/2)
-    z_crit = norm.ppf((1+ci)/2)
-    d = z_crit*se  # half-width: z* × SE(θ_i)
-    err = np.column_stack((popt-d, popt+d))  # [lower, upper] per parameter
+    # Normal interval on each parameter: θ_i ± z_{(1+ci)/2} × SE(θ_i)
+    # scipy.stats.norm.interval returns (lower, upper) arrays, one value per parameter
+    err = np.column_stack(norm.interval(ci, loc=popt, scale=se))  # [lower, upper] per parameter
+    d = (err[:, 1]-err[:, 0])/2  # half-width: popt[i] ± d[i]
     return d, err
 
 
