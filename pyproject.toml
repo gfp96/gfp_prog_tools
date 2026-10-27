@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gfp_prog_tools"
+version = "0.1.0"
+description = "General Python helper functions (data handling, confidence intervals, graph formatting)"
+requires-python = ">=3.9"
+dependencies = ["numpy", "scipy", "pandas", "matplotlib", "seaborn"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
