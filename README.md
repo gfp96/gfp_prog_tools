@@ -8,16 +8,16 @@ from gfp_prog_tools import Set_graph_params, Save_figure, Wrap_marker, Calculate
 
 ## Install
 
-On the computer where the package is developed (edits take effect immediately):
+On a computer where the repository is cloned to `%USERPROFILE%\gfp_prog_tools` (edits take effect immediately):
 
 ```
-pip install -e C:\Users\floodpage\gfp_prog_tools
+pip install -e %USERPROFILE%\gfp_prog_tools
 ```
 
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.2.0
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.2.2
 ```
 
 ## Claude Code conventions
@@ -27,6 +27,13 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 (append it if that file already exists).
 
 ## Versions
+
+### v0.2.2
+
+- Confidence-interval functions now call `scipy.stats.t.interval` / `scipy.stats.norm.interval`
+  directly (same results as v0.2.0).
+- `claude/CLAUDE.md`: new "Trusted libraries before custom code" section.
+- Install paths written as `%USERPROFILE%\gfp_prog_tools`, so the same files work on every computer.
 
 ### v0.2.0
 
