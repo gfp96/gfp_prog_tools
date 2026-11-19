@@ -17,7 +17,7 @@ pip install -e %USERPROFILE%\gfp_prog_tools
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.2.2
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.3.0
 ```
 
 ## Claude Code conventions
@@ -27,6 +27,14 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 (append it if that file already exists).
 
 ## Versions
+
+### v0.3.0
+
+- New: `Round_value_uncertainty(value, unc, step=1, fallback_sig=3)` and
+  `Format_value_uncertainty(value, unc, step=1, sep="±", fallback_sig=3)`: round a value and its
+  uncertainty for display to a multiple of `step × 10^floor(log10|unc|)` (e.g. 62.2 ± 34.5 ->
+  `60±30` with `step=1`, `60±35` with `step=0.5`).
+- `__version__` now matches the package version.
 
 ### v0.2.2
 

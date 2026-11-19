@@ -8,6 +8,7 @@ Merges General_functions.py (2021-12-13) and graph_parameters.py (2021-11-17).
 @author: g.flood-page
 """
 import os
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -24,6 +25,8 @@ __all__ = [
     "Calculate_student_t_confidence_interval", "Calculate_normal_confidence_interval",
     "Calculate_confidence_interval_from_sample",
     "Calculate_student_t_confidence_interval_curve_fit", "Calculate_normal_confidence_interval_curve_fit",
+    # rounding for display
+    "Round_value_uncertainty", "Format_value_uncertainty",
     # graphs
     "Set_graph_params", "Save_figure", "Limit_datetime_ticks",
     "markers", "linestyles", "Wrap_marker", "Wrap_linestyle",
@@ -447,6 +450,99 @@ def Calculate_normal_confidence_interval_curve_fit(popt, pcov, ci=0.95):
     err = np.column_stack(norm.interval(ci, loc=popt, scale=se))  # [lower, upper] per parameter
     d = (err[:, 1]-err[:, 0])/2  # half-width: popt[i] ± d[i]
     return d, err
+
+
+# ---------------------------------------------------------------------------
+# Rounding for display
+# ---------------------------------------------------------------------------
+
+def Round_value_uncertainty(value, unc, step=1, fallback_sig=3):
+    """
+    Round a value and its uncertainty for display, so that the value never shows
+    more significant digits than the uncertainty.
+
+    The rounding increment is step × 10^floor(log10|unc|), i.e. step times the
+    leading decade of the uncertainty; both the uncertainty and the value are
+    rounded (half away from zero) to the nearest multiple of that increment.
+    Examples, for 62.2 ± 34.5: step=1 -> 60 ± 30 ; step=0.5 -> 60 ± 35.
+    Only for display: keep the unrounded values for any further calculation.
+
+    Parameters
+    ----------
+    value : float
+        Value to round (e.g. a fitted parameter).
+    unc : float
+        Its uncertainty (e.g. half-width of the confidence interval); the sign is ignored.
+    step : float, optional
+        Rounding increment as a fraction (or multiple) of the leading decade of unc
+        (default 1: round to the first significant digit of unc; 0.5: to the nearest
+        half decade; 0.1: keep two significant digits on unc).
+    fallback_sig : int, optional
+        Significant digits kept on value when unc is 0, NaN or infinite (default 3).
+
+    Returns
+    -------
+    value_r : float
+        Rounded value.
+    unc_r : float
+        Rounded uncertainty (NaN if unc is 0, NaN or infinite).
+    decimals : int
+        Number of decimals to print both numbers with, e.g. f"{value_r:.{decimals}f}".
+    """
+    value = float(value)  # plain float (also accepts numpy scalars)
+    unc = abs(float(unc))  # uncertainty magnitude
+    if not np.isfinite(value):
+        return value, np.nan, 0
+    if unc == 0 or not np.isfinite(unc):
+        # No usable uncertainty: keep fallback_sig significant digits on the value
+        exp_v = int(np.floor(np.log10(abs(value)))) if value != 0 else 0  # decade of the value
+        decimals = max(0, fallback_sig-1-exp_v)  # decimals giving fallback_sig significant digits
+        value_r = float(Decimal(str(value)).quantize(Decimal(1).scaleb(-decimals), rounding=ROUND_HALF_UP))  # rounded half away from zero
+        return value_r, np.nan, decimals
+    step_dec = Decimal(str(float(step)))  # step as an exact decimal (0.5 -> Decimal('0.5'))
+    if step_dec <= 0:
+        raise ValueError(f"step must be positive, not {step}")
+    exp_u = int(np.floor(np.log10(unc)))  # leading decade of the uncertainty: unc = a × 10^exp_u, 1 <= a < 10
+    inc = step_dec.scaleb(exp_u)  # rounding increment: step × 10^exp_u
+    # Number of multiples of inc, rounded half away from zero (Decimal avoids binary float artefacts)
+    n_unc = max((Decimal(str(unc))/inc).quantize(Decimal(1), rounding=ROUND_HALF_UP), Decimal(1))  # multiples of inc in unc (never 0)
+    n_val = (Decimal(str(value))/inc).quantize(Decimal(1), rounding=ROUND_HALF_UP)  # multiples of inc in value
+    decimals = max(0, -inc.normalize().as_tuple().exponent)  # decimals needed to write inc exactly
+    unc_r = float(n_unc*inc)  # rounded uncertainty
+    value_r = float(n_val*inc)  # rounded value
+    return value_r, unc_r, decimals
+
+
+def Format_value_uncertainty(value, unc, step=1, sep="±", fallback_sig=3):
+    """
+    Text "value ± uncertainty" rounded with Round_value_uncertainty, for figure
+    labels, legends and printed output.
+
+    Parameters
+    ----------
+    value : float
+        Value to display.
+    unc : float
+        Its uncertainty (e.g. half-width of the confidence interval).
+    step : float, optional
+        Rounding increment as a fraction of the leading decade of unc (default 1,
+        see Round_value_uncertainty).
+    sep : str, optional
+        Text placed between the value and the uncertainty (default "±"; use
+        r"$\\pm$" inside matplotlib math text, or " ± " for spacing).
+    fallback_sig : int, optional
+        Significant digits kept on value when unc is 0, NaN or infinite (default 3);
+        the uncertainty is then omitted.
+
+    Returns
+    -------
+    str
+        Formatted text, e.g. "60±30" (step=1) or "60±35" (step=0.5) for 62.2 ± 34.5.
+    """
+    value_r, unc_r, decimals = Round_value_uncertainty(value, unc, step=step, fallback_sig=fallback_sig)  # rounded numbers
+    if np.isnan(unc_r):
+        return f"{value_r:.{decimals}f}"
+    return f"{value_r:.{decimals}f}{sep}{unc_r:.{decimals}f}"
 
 
 # ---------------------------------------------------------------------------
