@@ -6,7 +6,167 @@ Created on Thu Oct 14 14:41:16 2021
 """
 
 # File containing soil class and sub classes for different soils
+import copy
+import itertools
 import numpy as np
+
+PATM_MPA = 0.101325  # atmospheric pressure [MPa], scales the Taiebat-type bulk modulus so that K is in MPa
+
+
+# ---------------------------- Bulk modulus equation forms ---------------------------------------
+def _K_hardin_drnevich(e, pe, Pref, A, B, C):
+    """
+    Bulk modulus, Hardin & Drnevich (1972) type expression with 3 parameters.
+
+    Parameters
+    ----------
+    e : float or np.ndarray
+        Void ratio [-].
+    pe : float or np.ndarray
+        Mean effective stress p', same unit as Pref.
+    Pref : float
+        Reference pressure, same unit as pe.
+    A : float
+        Stiffness parameter [MPa].
+    B : float
+        Void ratio parameter [-].
+    C : float
+        Pressure exponent [-].
+
+    Returns
+    -------
+    float or np.ndarray
+        Bulk modulus K [MPa].
+    """
+    # Hardin & Drnevich (1972) type expression: K = A (B - e)^2 / (1 + e) (p'/Pref)^C
+    return A*(B-e)**2/(1+e)*(pe/Pref)**C
+
+
+def _K_taiebat(e, pe, Pref, K0, exponent):
+    """
+    Bulk modulus, Taiebat-type expression with 2 parameters as proposed in 
+    Taiebat, M. & Dafalias, Y. F. SANISAND: Simple anisotropic sand plasticity model. International Journal for Numerical and Analytical Methods in Geomechanics 32, 915–948 (2008).
+
+    Parameters
+    ----------
+    e : float or np.ndarray
+        Void ratio [-].
+    pe : float or np.ndarray
+        Mean effective stress p', same unit as Pref.
+    Pref : float
+        Reference pressure, same unit as pe.
+    K0 : float
+        Dimensionless stiffness parameter [-].
+    exponent : float
+        Pressure exponent [-].
+
+    Returns
+    -------
+    float or np.ndarray
+        Bulk modulus K [MPa], whatever the unit of pe and Pref.
+    """
+    # Taiebat-type expression: K = K0 patm (1 + e)/e (p'/Pref)^exponent, with patm in MPa
+    return K0*PATM_MPA*(1+e)/e*(pe/Pref)**exponent
+
+
+def _K_no_void_ratio(e, pe, Pref, D, E):
+    """
+    Bulk modulus, power law of the pressure only (no effect of void ratio), 2 parameters.
+
+    Parameters
+    ----------
+    e : float or np.ndarray
+        Void ratio [-]. Not used in the expression, only to give the output the shape of e and pe broadcast together.
+    pe : float or np.ndarray
+        Mean effective stress p', same unit as Pref.
+    Pref : float
+        Reference pressure, same unit as pe.
+    D : float
+        Bulk modulus at p' = Pref [MPa].
+    E : float
+        Pressure exponent [-].
+
+    Returns
+    -------
+    float or np.ndarray
+        Bulk modulus K [MPa].
+    """
+    # Power law: K = D (p'/Pref)^E, multiplied by ones shaped like e so the output broadcasts like the other forms
+    return D*(pe/Pref)**E*np.ones_like(e, dtype=float)
+
+
+# Registry of the bulk modulus equation forms: key -> function and its parameter names
+BULK_MODULUS_MODELS = {
+    "hardin_drnevich": {"function": _K_hardin_drnevich, "params": ("A", "B", "C"),
+                        "expression": "K = A (B - e)^2/(1 + e) (p'/Pref)^C"},
+    "taiebat": {"function": _K_taiebat, "params": ("K0", "exponent"),
+                "expression": "K = K0 patm (1 + e)/e (p'/Pref)^exponent"},
+    "no_void_ratio": {"function": _K_no_void_ratio, "params": ("D", "E"),
+                      "expression": "K = D (p'/Pref)^E"},
+}
+
+BULK_MODULUS_PHASES = ("virgin_loading", "unloading")  # loading phases with their own bulk modulus law
+
+
+def _Check_bulk_modulus_law(model, params):
+    """
+    Check a bulk modulus law and return its parameters as {name: (value, half-width)}.
+
+    Parameters
+    ----------
+    model : str
+        Key of BULK_MODULUS_MODELS ("hardin_drnevich", "taiebat" or "no_void_ratio").
+    params : dict
+        {name: (value, half-width)} or {name: value} (half-width then 0) for every
+        parameter of the model.
+
+    Returns
+    -------
+    dict
+        {name: (value, half-width)} with float entries.
+
+    Raises
+    ------
+    ValueError
+        If the model is unknown or the parameter names do not match the model.
+    """
+    if model not in BULK_MODULUS_MODELS:
+        raise ValueError(f"Unknown bulk modulus model '{model}'. Choose from {list(BULK_MODULUS_MODELS)}.")
+    expected = BULK_MODULUS_MODELS[model]["params"]  # parameter names required by the model
+    if set(params) != set(expected):
+        raise ValueError(f"Model '{model}' needs parameters {expected}, got {tuple(params)}.")
+    checked = {}  # parameters as (value, half-width)
+    for name, val in params.items():
+        value, half_width = (val if isinstance(val, (tuple, list)) else (val, 0.0))  # value and CI half-width
+        checked[name] = (float(value), float(half_width))
+    return checked
+
+
+def _Get_corner_bounds(func, centres, half_widths):
+    """
+    Bounds of a model output obtained by evaluating it at every combination of the
+    lower and upper bounds of its arguments (2**len(centres) "corners"). Valid when the
+    model is monotonic in each argument over the intervals considered.
+
+    Parameters
+    ----------
+    func : callable
+        Model, called as func(*args) with one value per entry of centres.
+    centres : sequence of float or np.ndarray
+        Central value of each argument (arrays are broadcast together by func).
+    half_widths : sequence of float or np.ndarray
+        Half-width of the interval on each argument (0 for an exact argument).
+
+    Returns
+    -------
+    mini, maxi : float or np.ndarray
+        Lowest and highest model output over all corners (NaN corners ignored).
+    """
+    # itertools.product: every combination of (lower, upper) bound across the arguments
+    corners = itertools.product(*[(c - h, c + h) for c, h in zip(centres, half_widths)])  # iterator of argument tuples
+    values = np.array([func(*corner) for corner in corners], dtype=float)  # model output at each corner, stacked on axis 0
+    # np.nanmin / np.nanmax: element-wise extrema over the corners, ignoring NaN (e.g. negative pressure to a fractional power)
+    return np.nanmin(values, axis=0), np.nanmax(values, axis=0)
 # ---------------------------- Soil Class---------------------------------------
 
 
@@ -519,6 +679,26 @@ class Sand(Soil):
         super().__init__(name)
         Soil.__Init__(s, name)
 
+    def __init__(s, name, Id):
+        """
+        Create a sand and give it its own copy of the class bulk modulus laws, so that
+        Set_bulk_modulus_law on one instance does not change the other instances.
+
+        Parameters
+        ----------
+        name : str
+            Name of the soil.
+        Id : float
+            Density index [-].
+
+        Returns
+        -------
+        None
+        """
+        super().__init__(name, Id)
+        s.K_virgin_loading = copy.deepcopy(type(s).K_virgin_loading)  # instance copy of the virgin loading law
+        s.K_unloading = copy.deepcopy(type(s).K_unloading)  # instance copy of the unloading law
+
     G0A = 0. #GFP AIC paper
     G0B = 0. #GFP AIC paper
     G0C = 0. #GFP AIC paper
@@ -529,17 +709,14 @@ class Sand(Soil):
     Cu = 0. 
     D50 = 0.0
     Ks = 3.7e10 # Bulk modulus grains : Subramaniyanet al. 2015 (for Fontainebleau sandstone)
-    # default : unloading bulk modulus (elastic)
-    KA = 1.92 #parameter A for Hardin style fitting from drained consolidation
-    dKA = 0.01 #error on A : 0.95 ci with Student law
-    KB = 8.14 #parameter B for Hardin style fitting from drained consolidation
-    dKB = 0.03 #error on B : 0.95 ci with Student law
-    KC = 0.6645 #parameter C for Hardin style fitting from drained consolidation
-    dKC = 0.0002 #error on C : 0.95 ci with Student law
-    KD = 0.0 #parameter for fitting that does not depend on e/Id -> A
-    dKD = 0.0 #error on D : 0.95 ci with student law
-    KE = 0.0 #parameter for fitting that does not depend on e/Id -> C
-    dKE = 0.0 #error on E : 0.95 ci with Student law
+    # Bulk modulus laws, one per phase: equation form (key of BULK_MODULUS_MODELS), parameters as (value, half-width of 0.95 Student t ci), data source
+    # Copied to each instance in __init__, change them with Set_bulk_modulus_law
+    K_virgin_loading = {"model": "hardin_drnevich",
+                        "params": {"A": (72.8, 0.4), "B": (1.662, 0.003), "C": (0.499, 0.001)},
+                        "source": "N/A"}
+    K_unloading = {"model": "taiebat",
+                   "params": {"K0": (251.67, 0.03), "exponent": (2/3, 0.0)},  # exponent fixed during fitting -> no error
+                   "source": "N/A"}
     dpois = 0.0 #error on poisson ratio
     Mcc = 0.0 #Critical state stress ratio in compression
     phics = -1.0 #Critical state friction angle 
@@ -556,29 +733,6 @@ class Sand(Soil):
     #modulus reduction
     gammar = -1.0 #parameter for stokoe type modulus reduction
     alpha_reduction = -1.0 #exponent for stokoe type modulus reduction
-
-    def Update_hardin_K_params(s, phase = "Un"):
-        """
-        This function allows a choice between different parameter sets for K = f(p', e)\n
-        - If phase = Un : Unloading : unloading (elastic) params\n
-        - If phase = UL : Unconsolidated loading (elasto-plastic) params
-        """
-        if phase=="Un":
-            s.KA = 1.92 #parameter A for Hardin style fitting from drained consolidation
-            s.dKA = 0.01 #error on A : 0.95 ci with Student law
-            s.KB = 8.14 #parameter B for Hardin style fitting from drained consolidation
-            s.dKB = 0.03 #error on B : 0.95 ci with Student law
-            s.KC = 0.6645 #parameter C for Hardin style fitting from drained consolidation
-            s.dKC = 0.0002 #error on C : 0.95 ci with Student law
-        elif phase=="UL":
-            s.KA = 72.8 #parameter A for Hardin style fitting from drained consolidation
-            s.dKA = 0.4 #error on A : 0.95 ci with Student law
-            s.KB = 1.662 #parameter B for Hardin style fitting from drained consolidation
-            s.dKB = 0.003 #error on B : 0.95 ci with Student law
-            s.KC = 0.499 #parameter C for Hardin style fitting from drained consolidation
-            s.dKC = 0.001 #error on C : 0.95 ci with Student law
-        else:
-            print("Please choose either Un or UL phases")
 
     def Get_hardin_drnevich_G0(s, pe, Pref = 101.325, calculate_ci=False, dpe = 0.0, de = 0.0):
         """
@@ -655,64 +809,156 @@ class Sand(Soil):
         return 67.1*s.Cu**(-0.2)*s.e**(-1-(s.D50/20)**0.75)*(pe/Pref)**(0.48*s.Cu**0.09)
     
 
-
-
-    def Get_hardin_drnevich_K(s, pe, Pref = 101.325, calculate_ci = False, dpe = 0):
+    def Set_bulk_modulus_law(s, phase, model, params, source="N/A"):
         """
-        Get and set K using Hardin & Drnevich (1972) equations : soil parameters must be previously given. 
-        pe is effective stress in the same unit as Pref (default is kPa)
-        Returned modulus is in MPA
-        If calculate_ci is True, returns value, min, max. Uses the ci on parameters defined before
-        Supposes that highers error bound given by pe+dpe and lower by pe-dpe
-        """
-        #tested and validated with error calculation
-        # Pref usually taken as atmospheric pressure
-        value = s.KA*(s.KB-s.e)**2/(1+s.e)*(pe/Pref)**s.KC
-        if calculate_ci==False:
-            return  value
-        else:
-            cis = np.array([[s.KA-s.dKA, s.KA+s.dKA], [s.KB-s.dKB, s.KB+s.dKB], [s.KC-s.dKC, s.KC+s.dKC], [s.e-s.err_e, s.e+s.err_e]], dtype = float)
-            combs = np.zeros((2**cis.shape[0], 4), dtype = float)
-            counter = 0
-            for i, ka in enumerate(cis[0, :]):
-                for j, kb in enumerate(cis[1, :]):
-                    for k, kc in enumerate(cis[2, :]):
-                        for l, e in enumerate(cis[3, :]):
-                            combs[counter, :] = [ka, kb, kc, e]
-                            counter+=1
-            params_ones = np.ones_like(combs[:, 0], dtype = float)
-            maxi = np.nanmax(combs[:, 0]*(combs[:, 1]-combs[:, 3])**2/(1+combs[:, 3])*np.outer(((pe+dpe)/Pref), params_ones)**combs[:, 2], axis = 1)[0]
-            mini = np.nanmin(combs[:, 0]*(combs[:, 1]-combs[:, 3])**2/(1+combs[:, 3])*np.outer(((pe-dpe)/Pref), params_ones)**combs[:, 2], axis = 1)[0]
-            return np.array([value, mini, maxi], dtype = float)
+        Set the bulk modulus law of this soil instance for one phase.
 
-    def Get_fitted_K(s, pe, Pref = 101.325, calculate_ci = False, dpe = 0):
-        """
-        Get and set K using simplified Hardin & Drnevich (1972) equations : soil parameters must be previously given. 
-        pe is effective stress in the same unit as Pref (default is kPa)
-        Returned modulus is in MPA
-        If calculate_ci is True, returns value, min, max. Uses the ci on parameters defined before
-        Supposes that highers error bound given by pe+dpe and lower by pe-dpe
-        """
-        # Pref usually taken as atmospheric pressure
-        #tested and validated with error calculation
-        value = s.KD*(pe/Pref)**s.KE 
-        if calculate_ci==False:
-            return  value
-        else:
-            cis = np.array([[s.KD-s.dKD, s.KD+s.dKD], [s.KE-s.dKE, s.KE+s.dKE]], dtype = float)
-            combs = np.zeros((2**cis.shape[0], 2), dtype = float)
-            counter = 0
-            for i, ka in enumerate(cis[0, :]):
-                for k, kc in enumerate(cis[1, :]):
-                    combs[counter, :] = [ka, kc]
-                    counter+=1
-            params_ones = np.ones_like(combs[:, 0], dtype = float)
-            maxi = np.nanmax(combs[:, 0]*np.outer(((pe+dpe)/Pref), params_ones)**combs[:, 1], axis = 1)[0]
-            mini = np.nanmin(combs[:, 0]*np.outer(((pe-dpe)/Pref), params_ones)**combs[:, 1], axis = 1)[0]
-            return np.array([value, mini, maxi], dtype = float)
+        Parameters
+        ----------
+        phase : str
+            "virgin_loading" or "unloading".
+        model : str
+            Equation form, key of BULK_MODULUS_MODELS:
+            "hardin_drnevich" (A, B, C), "taiebat" (K0, exponent) or "no_void_ratio" (D, E).
+        params : dict
+            {name: (value, half-width)} for every parameter of the model; a bare value
+            means a half-width of 0. Half-widths are those of the 0.95 confidence intervals.
+        source : str, optional
+            Origin of the parameters (default "N/A").
 
-     
-    
+        Returns
+        -------
+        None
+
+        Raises
+        ------
+        ValueError
+            If the phase or model is unknown, or the parameter names do not match the model.
+        """
+        if phase not in BULK_MODULUS_PHASES:
+            raise ValueError(f"Unknown phase '{phase}'. Choose from {BULK_MODULUS_PHASES}.")
+        law = {"model": model, "params": _Check_bulk_modulus_law(model, params), "source": source}  # checked law
+        setattr(s, f"K_{phase}", law)
+
+    def _Get_bulk_modulus(s, phase, e, pe, model=None, params=None, Pref=101.325,
+                          calculate_ci=False, de=0.0, dpe=0.0):
+        """
+        Bulk modulus from the law stored for a phase, optionally overridden for this call.
+
+        Parameters
+        ----------
+        phase : str
+            "virgin_loading" or "unloading".
+        e, pe, Pref, calculate_ci, de, dpe :
+            See Get_virgin_loading_bulk_modulus.
+        model : str, optional
+            Equation form overriding the stored one for this call (params must then be complete).
+        params : dict, optional
+            Parameters overriding the stored ones for this call: {name: (value, half-width)}.
+            With the stored model, only the parameters to change need to be given.
+
+        Returns
+        -------
+        float, np.ndarray or tuple
+            See Get_virgin_loading_bulk_modulus.
+        """
+        law = getattr(s, f"K_{phase}")  # stored law for the phase
+        if model is None or model == law["model"]:
+            model = law["model"]  # equation form used
+            params = {**law["params"], **(params or {})}  # stored parameters, updated by the overrides
+        elif params is None:
+            raise ValueError(f"Model '{model}' differs from the stored one: give all its parameters in params.")
+        params = _Check_bulk_modulus_law(model, params)  # {name: (value, half-width)}
+        func = BULK_MODULUS_MODELS[model]["function"]  # equation of the model
+        names = list(params)  # parameter names, in the order used below
+        e = np.asarray(e, dtype=float)  # void ratio as array
+        pe = np.asarray(pe, dtype=float)  # mean effective stress as array
+
+        def model_func(*args):
+            # args = parameter values (in the order of names), then e, then pe
+            return func(args[-2], args[-1], Pref, **dict(zip(names, args[:-2])))
+
+        value = model_func(*[params[n][0] for n in names], e, pe)  # bulk modulus [MPa]
+        if not calculate_ci:
+            return value
+        mini, maxi = _Get_corner_bounds(model_func, [params[n][0] for n in names] + [e, pe],
+                                        [params[n][1] for n in names] + [de, dpe])  # bounds of K [MPa]
+        return value, mini, maxi
+
+    def Get_virgin_loading_bulk_modulus(s, e, pe, model=None, params=None, Pref=101.325,
+                                        calculate_ci=False, de=0.0, dpe=0.0):
+        """
+        Drained bulk modulus on virgin (first) loading, from the law in s.K_virgin_loading
+        (Sand default: Hardin & Drnevich (1972) type, K = A (B - e)^2/(1 + e) (p'/Pref)^C).
+
+        Parameters
+        ----------
+        e : float or np.ndarray
+            Void ratio [-].
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa). Broadcast against e.
+        model : str, optional
+            Equation form for this call only: "hardin_drnevich", "taiebat" or "no_void_ratio".
+            None: the stored one.
+        params : dict, optional
+            Parameters for this call only, {name: (value, half-width)}. None: the stored ones.
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+        calculate_ci : bool, optional
+            If True, also return the bounds of K over the parameter intervals (default False).
+        de : float or np.ndarray, optional
+            Half-width of the uncertainty on e (default 0).
+        dpe : float or np.ndarray, optional
+            Half-width of the uncertainty on pe (default 0).
+
+        Returns
+        -------
+        float or np.ndarray
+            K in MPa if calculate_ci is False.
+        tuple (value, mini, maxi)
+            If calculate_ci is True: K and its lower and upper bounds, from every combination
+            of the interval bounds of the parameters (stored 0.95 confidence intervals), e and pe.
+        """
+        return s._Get_bulk_modulus("virgin_loading", e, pe, model=model, params=params, Pref=Pref,
+                                   calculate_ci=calculate_ci, de=de, dpe=dpe)
+
+    def Get_unloading_bulk_modulus(s, e, pe, model=None, params=None, Pref=101.325,
+                                   calculate_ci=False, de=0.0, dpe=0.0):
+        """
+        Elastic bulk modulus on unloading, from the law in s.K_unloading
+        (Sand default: Taiebat type, K = K0 patm (1 + e)/e (p'/Pref)^exponent).
+
+        Parameters
+        ----------
+        e : float or np.ndarray
+            Void ratio [-].
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa). Broadcast against e.
+        model : str, optional
+            Equation form for this call only: "hardin_drnevich", "taiebat" or "no_void_ratio".
+            None: the stored one.
+        params : dict, optional
+            Parameters for this call only, {name: (value, half-width)}. None: the stored ones.
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+        calculate_ci : bool, optional
+            If True, also return the bounds of K over the parameter intervals (default False).
+        de : float or np.ndarray, optional
+            Half-width of the uncertainty on e (default 0).
+        dpe : float or np.ndarray, optional
+            Half-width of the uncertainty on pe (default 0).
+
+        Returns
+        -------
+        float or np.ndarray
+            K in MPa if calculate_ci is False.
+        tuple (value, mini, maxi)
+            If calculate_ci is True: K and its lower and upper bounds, from every combination
+            of the interval bounds of the parameters (stored 0.95 confidence intervals), e and pe.
+        """
+        return s._Get_bulk_modulus("unloading", e, pe, model=model, params=params, Pref=Pref,
+                                   calculate_ci=calculate_ci, de=de, dpe=dpe)
+
     def Get_modulus_degradation_oztoprak(s, strain, pe, e, Id, Pref = 101.325):
         """
         Use works of Oztoprak & Bolton (2013) : strain can be an array, if so, returns a matrix
@@ -859,16 +1105,13 @@ class NE34(Sand):
     G0E = 0.52 #parameter for fitting that does not depend on e/Id
     dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
     Cu = 1.5 #andria
-    KA = 19.99 #parameter A for Hardin style fitting from drained consolidation
-    dKA = 5.03 #error on A : 0.95 ci with Student law
-    KB = 2.98 #parameter B for Hardin style fitting from drained consolidation
-    dKB = 0.3 #error on B : 0.95 ci with Student law
-    KC = 0.46 #parameter C for Hardin style fitting from drained consolidation
-    dKC = 0.011 #error on C : 0.95 ci with Student law
-    KD = 0.0 #parameter for fitting that does not depend on e/Id -> A
-    dKD = 0.0 #error on D : 0.95 ci with student law
-    KE = 0.0 #parameter for fitting that does not depend on e/Id -> C
-    dKE = 0.0 #error on E : 0.95 ci with Student law
+    # Bulk modulus laws from drained consolidation: (value, half-width of 0.95 Student t ci)
+    K_virgin_loading = {"model": "hardin_drnevich",
+                        "params": {"A": (22.12, 3.63), "B": (2.62, 0.16), "C": (0.6, 0.011)},
+                        "source": "Flood-Page et al. (2024) - UC"}
+    K_unloading = {"model": "no_void_ratio",
+                   "params": {"D": (72.78, 0.15), "E": (0.69, 0.002)},
+                   "source": "Flood-Page et al. (2024) - OC - Unloading"}
     dpois = 0.001 # from paper on aic
     Mcc = 1.293 #Critical state stress ratio in compression from my analysis of Benahmed/Azeiteiro papers
     phics = 30.0 #Critical state friction angle from phipeak/psipeak analysis
@@ -925,195 +1168,6 @@ class NE34(Sand):
         #To be tested
         return 25.3*(0.513*GG0**2-1.351*GG0+1)
 
-
-    def Reset_Hardin_Drnevich_params(s, datasource="Flood-Page et al. (2022)"):
-        #default
-        s.KA = 0.
-        s.dKA = 0.
-        s.KB = 0.
-        s.dKB = 0.
-        s.KC = 0.
-        s.dKC = 0.
-        s.KD = 0. #for overconsolidated unloading - no impact of void ratio (so)
-        s.dKD = 0.
-        s.KE = 0.
-        s.dKE = 0.
-        s.data_origin = datasource
-        if datasource=="Andria-Ntoanina (2011)":
-            s.G0A = 63.7 #Hussein - andria
-            s.G0B = 2.17 #Hussein - andria
-            s.G0C = 0.43 #Hussein - andria
-            s.poisson = 0.2  #me
-            s.G0D = 0.0
-            s.G0E = 0.0
-        elif datasource=="Delfosse-Ribay et al. (2004)":
-            s.G0A = 68.2 #Hussein - delfosse
-            s.G0B = 2.17 #Hussein - delfosse
-            s.G0C = 0.47 #Hussein - delfosse
-            s.poisson = 0.2  # me
-            s.G0D = 0.0
-            s.G0E = 0.0
-            s.poisson_noId = 0.2
-        elif datasource=="Flood-Page et al. (2022)":
-            s.G0A = 72.7 #GFP AIC paper
-            s.G0B = 2.17 #GFP AIC paper
-            s.G0C = 0.49 #GFP AIC paper
-            s.poisson = 0.18  # me
-            s.G0D = 99.98
-            s.dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law
-            s.G0E = 0.52 #parameter for fitting that does not depend on e/Id
-            s.dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
-            s.poisson_noId = 0.18
-            s.KA = 19.99 #parameter A for Hardin style fitting from drained consolidation
-            s.dKA = 5.03 #error on A : 0.95 ci with Student law
-            s.KB = 2.98 #parameter B for Hardin style fitting from drained consolidation
-            s.dKB = 0.3 #error on B : 0.95 ci with Student law
-            s.KC = 0.46 #parameter C for Hardin style fitting from drained consolidation
-            s.dKC = 0.011 #error on C : 0.95 ci with Student law
-        elif datasource=="Flood-Page et al. (2023) - UC":
-            s.G0A = 72.7 #GFP AIC paper
-            s.G0B = 2.17 #GFP AIC paper
-            s.G0C = 0.49 #GFP AIC paper
-            s.poisson = 0.18  # me
-            s.G0D = 99.98
-            s.dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law
-            s.G0E = 0.52 #parameter for fitting that does not depend on e/Id
-            s.dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
-            s.poisson_noId = 0.18
-            s.KA = 22.12 #parameter A for Hardin style fitting from drained consolidation
-            s.dKA = 3.63 #error on A : 0.95 ci with Student law
-            s.KB = 2.62 #parameter B for Hardin style fitting from drained consolidation
-            s.dKB = 0.16 #error on B : 0.95 ci with Student law
-            s.KC = 0.6 #parameter C for Hardin style fitting from drained consolidation
-            s.dKC = 0.011 #error on C : 0.95 ci with Student law
-        elif datasource=="Flood-Page et al. (2023) - OC - Loading":
-            s.G0A = 72.7 #GFP AIC paper
-            s.G0B = 2.17 #GFP AIC paper
-            s.G0C = 0.49 #GFP AIC paper
-            s.poisson = 0.18  # me
-            s.G0D = 99.98
-            s.dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law
-            s.G0E = 0.52 #parameter for fitting that does not depend on e/Id
-            s.dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
-            s.poisson_noId = 0.18
-            s.KA = 19.99 #parameter A for Hardin style fitting from drained consolidation
-            s.dKA = 5.03 #error on A : 0.95 ci with Student law
-            s.KB = 2.98 #parameter B for Hardin style fitting from drained consolidation
-            s.dKB = 0.3 #error on B : 0.95 ci with Student law
-            s.KC = 0.46 #parameter C for Hardin style fitting from drained consolidation
-            s.dKC = 0.011 #error on C : 0.95 ci with Student law
-        elif datasource=="Flood-Page et al. (2023) - OC - Unloading":
-            s.G0A = 72.7 #GFP AIC paper
-            s.G0B = 2.17 #GFP AIC paper
-            s.G0C = 0.49 #GFP AIC paper
-            s.poisson = 0.18  # me
-            s.G0D = 99.98
-            s.dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law
-            s.G0E = 0.52 #parameter for fitting that does not depend on e/Id
-            s.dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
-            s.poisson_noId = 0.18
-            s.KD = 72.78 #parameter A/D for simplified Hardin style fitting from drained consolidation
-            s.dKD = 0.15 #error on D : 0.95 ci with Student law
-            s.KE = 0.69 #parameter C/E for simplified Hardin style fitting from drained consolidation
-            s.dKE = 0.002 #error on E : 0.95 ci with Student law
-        elif datasource=="BE - Manual - Selected - Grade1":
-            s.G0A = 68.85 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.49 #me
-            s.poisson = 0.16
-            s.G0D = 94.55
-            s.G0E = 0.53
-            s.poisson_noId = 0.16
-        elif datasource=="BE - Manual - All - Grade1":
-            s.G0A = 70.47 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.46 #me
-            s.poisson = 0.18
-            s.G0D = 98.55
-            s.G0E = 0.48
-            s.poisson_noId = 0.18
-        elif datasource=="BE - Mixed - Selected - Grade1":
-            s.G0A = 72.7 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.49 #me
-            s.poisson = 0.18
-            s.G0D = 99.98
-            s.G0E = 0.52
-            s.poisson_noId = 0.18
-        elif datasource=="BE - Mixed - All - Grade1":
-            s.G0A = 73.46 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.47 #me
-            s.poisson = 0.19
-            s.G0D = 102.78
-            s.G0E = 0.49
-            s.poisson_noId = 0.19
-        elif datasource=="BE - SLA - Selected - Grade1":
-            s.G0A = 72.7 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.49 #me
-            s.poisson = 0.2
-            s.G0D = 99.98
-            s.G0E = 0.52
-            s.poisson_noId = 0.2
-        elif datasource=="BE - Manual - Selected - Grade3":
-            s.G0A = 69.40 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.49 #me
-            s.poisson = 0.17
-            s.G0D = 94.79
-            s.G0E = 0.53
-            s.poisson_noId = 0.17
-        elif datasource=="BE - Mixed - Selected - Grade3":
-            s.G0A = 72.71 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.48 #me
-            s.poisson = 0.18
-            s.G0D = 99.52
-            s.G0E = 0.51
-            s.poisson_noId = 0.17
-        elif datasource=="BE - Mixed - All - Grade3":
-            s.G0A = 71.83 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.46 #me
-            s.poisson = 0.19
-            s.G0D = 100.96
-            s.G0E = 0.47
-            s.poisson_noId = 0.19
-        elif datasource=="BE - SLA - Selected - Grade3":
-            s.G0A = 72.71 #me
-            s.G0B = 2.17 #me
-            s.G0C = 0.48 #me
-            s.poisson = 0.18
-            s.G0D = 99.52
-            s.G0E = 0.51
-            s.poisson_noId = 0.18
-        elif datasource=="Drained consolidation - Unconsolidated":
-            s.KA = 22.12 #me
-            s.KB = 2.62 #me
-            s.KC = 0.6 #me
-        elif datasource=="Drained consolidation - Consolidated, Unloading":
-            s.KA = 6.29 #me
-            s.KB = 5 #me
-            s.KC = 0.63 #me
-        elif datasource=="Drained consolidation - Consolidated, Reloading":
-            s.KA = 19.99 #me
-            s.KB = 2.98 #me
-            s.KC = 0.46 #me
-        # elif datasource=="Experiments - SLA/Unconsolidated":
-        #     s.G0A = 66.63 #me
-        #     s.G0B = 2.17 #me
-        #     s.G0C = 0.46 #me
-        # elif datasource=="Experiments - Manual - Consolidated":
-        #     s.G0A = 63.66 #me
-        #     s.G0B = 2.17 #me
-        #     s.G0C = 0.4 #me
-        # elif datasource=="Experiments - SLA/Consolidated":
-        #     s.G0A = 66.52 #me
-        #     s.G0B = 2.17 #me
-        #     s.G0C = 0.41 #me
-        else:
-            print("The selcted datasource is unknown")
 
     def Get_G0(s, pe):
         """Get the small strain shear modulus (in Pa) from effective stress (in Pa) - deprecated : use """
@@ -1193,6 +1247,14 @@ class Karlsruhe_fine_sand(Sand):
     g0 = 202 #Parameter g0 for P2Psand small strain shear modulus
     Cp2p = 0.5 #Parameter Cp2p for P2Psand small strain shear modulus
 
+    # Bulk modulus laws: (value, half-width of 0.95 Student t ci)
+    K_virgin_loading = {"model": "hardin_drnevich",
+                        "params": {"A": (94.7, 0.7), "B": (1.615, 0.003), "C": (0.471, 0.002)},
+                        "source": "N/A"}
+    K_unloading = {"model": "taiebat",
+                   "params": {"K0": (251.47, 0.03), "exponent": (2/3, 0.0)},  # exponent fixed during fitting -> no error
+                   "source": "N/A"}
+
 # ---------------------------- Hostun_rf class---------------------------------------
 class HostunRF(Sand):
     """Class for Hostun RF sand"""
@@ -1213,10 +1275,10 @@ class HostunRF(Sand):
     dG0B = 0.042 #data afrom Azeiteiro, GFP fit
     G0C = 0.49 #data afrom Azeiteiro, GFP fit
     dG0C = 0.04 #data afrom Azeiteiro, GFP fit
-    KD = 23.5 #from consolidation of Tran et al.
-    dKD = 0.9 #from consolidation of Tran et al.
-    KE = 0.28 #from cons Tran et al.
-    dKE = 0.08 #from consolidation of Tran et al.
+    # Virgin loading bulk modulus from consolidation of Tran et al.: (value, half-width of 0.95 ci). Unloading: Sand default
+    K_virgin_loading = {"model": "no_void_ratio",
+                        "params": {"D": (23.5, 0.9), "E": (0.28, 0.08)},
+                        "source": "Tran et al."}
     g0_dm04 = 296 #dm04 g0 parameter : fitted from Azeiteiro (2017) data 
     # G0D = 99.98 #parameter for fitting that does not depend on e/Id
     # dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law

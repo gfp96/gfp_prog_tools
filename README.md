@@ -28,6 +28,30 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 
 ## Versions
 
+### v0.5.0 (draft, not released)
+
+`soils`: bulk modulus laws per loading phase. Breaking changes for `Sand` and subclasses.
+
+- Each sand class holds one law per phase, `K_virgin_loading` and `K_unloading`:
+  `{"model": ..., "params": {name: (value, half-width of the 0.95 ci)}, "source": ...}`.
+  Equation forms (`BULK_MODULUS_MODELS`):
+  - `"hardin_drnevich"`: K = A (B − e)²/(1 + e) (p′/Pref)^C (Sand default for virgin loading)
+  - `"taiebat"`: K = K0 patm (1 + e)/e (p′/Pref)^exponent, patm = 0.101325 MPa (Sand default for unloading)
+  - `"no_void_ratio"`: K = D (p′/Pref)^E
+- New: `Get_virgin_loading_bulk_modulus(e, pe, model=None, params=None, Pref=101.325, calculate_ci=False, de=0, dpe=0)`,
+  `Get_unloading_bulk_modulus(...)` (same arguments), `Set_bulk_modulus_law(phase, model, params, source)`.
+  K is returned in MPa whatever the unit of `pe` and `Pref`.
+- Removed: `Get_hardin_drnevich_K`, `Get_fitted_K`, `Update_hardin_K_params`, `NE34.Reset_Hardin_Drnevich_params`,
+  attributes `KA`…`KE`, `dKA`…`dKE`.
+
+| Old call | New call |
+|---|---|
+| `soil.Update_hardin_K_params("UL"); soil.Get_hardin_drnevich_K(pe)` | `soil.Get_virgin_loading_bulk_modulus(soil.e, pe)` |
+| `soil.Update_hardin_K_params("Un"); soil.Get_hardin_drnevich_K(pe)` | `soil.Get_unloading_bulk_modulus(soil.e, pe)` (Taiebat form; old Hardin unloading set dropped) |
+| `soil.Get_fitted_K(pe)` | `Get_virgin_loading_bulk_modulus` / `Get_unloading_bulk_modulus` with a `"no_void_ratio"` law |
+| `soil.KA = x` | `soil.Get_..._bulk_modulus(e, pe, params={"A": (x, 0)})` or `soil.Set_bulk_modulus_law(...)` |
+| `..., calculate_ci=True, dpe=d)` -> `[value, mini, maxi]` | `..., calculate_ci=True, dpe=d)` -> `(value, mini, maxi)` |
+
 ### v0.4.0
 
 - Added soil science modules, copied verbatim from `11_Python_scripts`:
