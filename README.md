@@ -17,7 +17,7 @@ pip install -e %USERPROFILE%\gfp_prog_tools
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.1
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.2
 ```
 
 ## Claude Code conventions
@@ -27,6 +27,15 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 (append it if that file already exists).
 
 ## Versions
+
+### v0.5.2
+
+`soils`:
+
+- New: `Sand.Get_sanisand04_G0(pe, Pref=101.325, calculate_ci=False, dpe=0, de=0, e=None)`, the SANISAND04
+  (Dafalias & Manzari, 2004) elastic shear modulus G = g0_dm04 Pref (2.97 - e)^2/(1 + e) (p'/Pref)^0.5, in the
+  unit of Pref. Raises ValueError if the class has no `g0_dm04` (new `Sand` defaults: `g0_dm04 = -1`, `dg0_dm04 = 0`).
+- `Get_hardin_drnevich_G0`: new optional argument `e` (void ratio, float or array); None keeps using `s.e`.
 
 ### v0.5.1
 

@@ -729,6 +729,8 @@ class Sand(Soil):
     ec0_dm04 = 0.88 #Parameter describing Critical state
     lc_dm04 = 0.0717 #Parameter describing Critical state
     xi_dm04 = 0.236 #Parameter describing Critical state
+    g0_dm04 = -1.0 #dimensionless SANISAND04 elastic shear modulus parameter (Get_sanisand04_G0) : -1 = not defined
+    dg0_dm04 = 0.0 #error on g0_dm04 : 0.95 ci (0 if unknown)
     Cdr = -1.0 #Parameter Cdr for P2Psand small strain shear modulus
     g0 = -1.0 #Parameter g0 for P2Psand small strain shear modulus
     Cp2p = -1.0 #Parameter Cp2p for P2Psand small strain shear modulus
@@ -737,10 +739,10 @@ class Sand(Soil):
     gammar = -1.0 #parameter for stokoe type modulus reduction
     alpha_reduction = -1.0 #exponent for stokoe type modulus reduction
 
-    def Get_hardin_drnevich_G0(s, pe, Pref = 101.325, calculate_ci=False, dpe = 0.0, de = 0.0):
+    def Get_hardin_drnevich_G0(s, pe, Pref = 101.325, calculate_ci=False, dpe = 0.0, de = 0.0, e=None):
         """
         Small strain shear modulus G0, Hardin & Drnevich (1972) type expression with
-        dimensionless parameters G0A, G0B, G0C of the soil class and the void ratio s.e:
+        dimensionless parameters G0A, G0B, G0C of the soil class:
         G0 = G0A Pref (G0B - e)^2/(1 + e) (p'/Pref)^G0C.
 
         Parameters
@@ -754,8 +756,10 @@ class Sand(Soil):
             (half-widths dG0A, dG0B, dG0C of the soil class, 0 if not given) (default False).
         dpe : float or np.ndarray, optional
             Half-width of the uncertainty on pe (default 0).
-        de : float, optional
-            Half-width of the uncertainty on s.e (default 0).
+        de : float or np.ndarray, optional
+            Half-width of the uncertainty on e (default 0).
+        e : float or np.ndarray, optional
+            Void ratio [-], broadcast against pe. None: the soil's current void ratio s.e (default None).
 
         Returns
         -------
@@ -765,7 +769,7 @@ class Sand(Soil):
             If calculate_ci is True: G0 and its lower and upper bounds, from every combination
             of the interval bounds of G0A, G0B, G0C, e and pe.
         """
-        e = np.asarray(s.e, dtype=float)  # void ratio
+        e = np.asarray(s.e if e is None else e, dtype=float)  # void ratio
         pe = np.asarray(pe, dtype=float)  # mean effective stress
 
         def model(G0A, G0B, G0C, e, pe):
@@ -777,6 +781,58 @@ class Sand(Soil):
             return value
         mini, maxi = _Get_corner_bounds(model, [s.G0A, s.G0B, s.G0C, e, pe],
                                         [s.dG0A, s.dG0B, s.dG0C, de, dpe])  # bounds of G0 [unit of Pref]
+        return value, mini, maxi
+
+    def Get_sanisand04_G0(s, pe, Pref = 101.325, calculate_ci=False, dpe = 0.0, de = 0.0, e=None):
+        """
+        Elastic shear modulus of the SANISAND04 model (Dafalias & Manzari, 2004), with the
+        dimensionless parameter g0_dm04 of the soil class and fixed constants 2.97 and 0.5:
+        G = g0 Pref (2.97 - e)^2/(1 + e) (p'/Pref)^0.5.
+        Use this (not Get_hardin_drnevich_G0) wherever the shear modulus must match the one of
+        the SANISAND04 implementation, e.g. when calibrating its plastic parameters.
+
+        Parameters
+        ----------
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa).
+        Pref : float, optional
+            Reference pressure, atmospheric pressure in SANISAND04 (default 101.325 kPa).
+        calculate_ci : bool, optional
+            If True, also return the bounds of G over the intervals on g0_dm04 (half-width
+            dg0_dm04 of the soil class, 0 if not given), e and pe (default False).
+        dpe : float or np.ndarray, optional
+            Half-width of the uncertainty on pe (default 0).
+        de : float or np.ndarray, optional
+            Half-width of the uncertainty on e (default 0).
+        e : float or np.ndarray, optional
+            Void ratio [-], broadcast against pe. None: the soil's current void ratio s.e (default None).
+
+        Returns
+        -------
+        float or np.ndarray
+            G in the unit of Pref (kPa by default) if calculate_ci is False.
+        tuple (value, mini, maxi)
+            If calculate_ci is True: G and its lower and upper bounds, from every combination
+            of the interval bounds of g0_dm04, e and pe.
+
+        Raises
+        ------
+        ValueError
+            If g0_dm04 is not defined (not positive) for this soil class.
+        """
+        if not s.g0_dm04 > 0:
+            raise ValueError(f"g0_dm04 is not defined for the {type(s).__name__} class.")
+        e = np.asarray(s.e if e is None else e, dtype=float)  # void ratio
+        pe = np.asarray(pe, dtype=float)  # mean effective stress
+
+        def model(g0, e, pe):
+            # Dafalias & Manzari (2004) SANISAND04 elastic shear modulus: G = g0 Pref (2.97 - e)^2/(1 + e) (p'/Pref)^0.5
+            return g0*Pref*(2.97-e)**2/(1+e)*(pe/Pref)**0.5
+
+        value = model(s.g0_dm04, e, pe)  # elastic shear modulus [unit of Pref]
+        if not calculate_ci:
+            return value
+        mini, maxi = _Get_corner_bounds(model, [s.g0_dm04, e, pe], [s.dg0_dm04, de, dpe])  # bounds of G [unit of Pref]
         return value, mini, maxi
 
     def Get_fitted_G0(s, pe, Pref = 101.325, calculate_ci = False, dpe = 0):
