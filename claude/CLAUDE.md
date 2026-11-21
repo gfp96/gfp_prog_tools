@@ -7,7 +7,7 @@ Apply these rules whenever writing or modifying Python code.
 - Source: `%USERPROFILE%\gfp_prog_tools` (GitHub: https://github.com/gfp96/gfp_prog_tools).
 - Import with `from gfp_prog_tools import ...`. If it is missing from the active environment,
   install it: `pip install -e %USERPROFILE%\gfp_prog_tools` if that clone exists, otherwise
-  `pip install "gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.4.0"`.
+  `pip install "gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.0"`.
 - Before writing a utility, check whether gfp_prog_tools already provides it
   (read `src/gfp_prog_tools/core.py`), and use it instead of re-implementing it. Available:
   - Files/data: `Ensure_dir`, `dateparse`, `Eliminate_absurd_values`, `Get_index_min_value`,
@@ -22,6 +22,10 @@ Apply these rules whenever writing or modifying Python code.
     `Format_value_uncertainty(value, unc, step, sep, fallback_sig)` -> `"60±30"`
   - Graphs: `Set_graph_params(font, style)`, `Save_figure(fig, folder, name, fmt)`,
     `Limit_datetime_ticks`, `markers`, `linestyles`, `Wrap_marker(i)`, `Wrap_linestyle(i)`
+  - Soil science submodules (import as `from gfp_prog_tools.soils import ...`): `soils` (soil classes
+    `Sand`, `NE34`, `Toyoura`, `Karlsruhe_fine_sand`, `HostunRF`; bulk modulus laws per phase via
+    `Get_virgin_loading_bulk_modulus`, `Get_unloading_bulk_modulus`, `Set_bulk_modulus_law`),
+    `fluid_comp_models`, `gas_properties`, `water_properties`
 - If a helper looks wrong or is missing something generally useful, say so instead of
   silently working around it.
 

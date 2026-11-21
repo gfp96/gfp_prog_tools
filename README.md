@@ -17,7 +17,7 @@ pip install -e %USERPROFILE%\gfp_prog_tools
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.4.0
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.0
 ```
 
 ## Claude Code conventions
@@ -28,7 +28,7 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 
 ## Versions
 
-### v0.5.0 (draft, not released)
+### v0.5.0
 
 `soils`: bulk modulus laws per loading phase. Breaking changes for `Sand` and subclasses.
 
