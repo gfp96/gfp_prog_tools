@@ -17,7 +17,7 @@ pip install -e %USERPROFILE%\gfp_prog_tools
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.3.0
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.4.0
 ```
 
 ## Claude Code conventions
@@ -27,6 +27,13 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 (append it if that file already exists).
 
 ## Versions
+
+### v0.4.0
+
+- Added soil science modules, copied verbatim from `11_Python_scripts`:
+  `gfp_prog_tools.soils` (soil classes), `gfp_prog_tools.fluid_comp_models`,
+  `gfp_prog_tools.gas_properties`, `gfp_prog_tools.water_properties`.
+  Import them as submodules, e.g. `from gfp_prog_tools.soils import Karlsruhe_fine_sand`.
 
 ### v0.3.0
 

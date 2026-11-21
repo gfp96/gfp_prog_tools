@@ -7,7 +7,7 @@ Apply these rules whenever writing or modifying Python code.
 - Source: `%USERPROFILE%\gfp_prog_tools` (GitHub: https://github.com/gfp96/gfp_prog_tools).
 - Import with `from gfp_prog_tools import ...`. If it is missing from the active environment,
   install it: `pip install -e %USERPROFILE%\gfp_prog_tools` if that clone exists, otherwise
-  `pip install "gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.3.0"`.
+  `pip install "gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.4.0"`.
 - Before writing a utility, check whether gfp_prog_tools already provides it
   (read `src/gfp_prog_tools/core.py`), and use it instead of re-implementing it. Available:
   - Files/data: `Ensure_dir`, `dateparse`, `Eliminate_absurd_values`, `Get_index_min_value`,
