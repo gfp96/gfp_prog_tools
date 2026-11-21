@@ -699,10 +699,13 @@ class Sand(Soil):
         s.K_virgin_loading = copy.deepcopy(type(s).K_virgin_loading)  # instance copy of the virgin loading law
         s.K_unloading = copy.deepcopy(type(s).K_unloading)  # instance copy of the unloading law
 
-    G0A = 0. #GFP AIC paper
-    G0B = 0. #GFP AIC paper
-    G0C = 0. #GFP AIC paper
-    G0D = 0. #parameter for fitting that does not depend on e/Id
+    G0A = 0. #dimensionless Hardin & Drnevich G0 parameter: G0 = G0A Pref (G0B-e)^2/(1+e) (p'/Pref)^G0C
+    dG0A = 0. #error on G0A : 0.95 ci (0 if unknown)
+    G0B = 0. #Hardin & Drnevich void ratio parameter [-]
+    dG0B = 0. #error on G0B : 0.95 ci (0 if unknown)
+    G0C = 0. #Hardin & Drnevich pressure exponent [-]
+    dG0C = 0. #error on G0C : 0.95 ci (0 if unknown)
+    G0D = 0. #dimensionless parameter, fitting that does not depend on e/Id: G0 = G0D Pref (p'/Pref)^G0E
     dG0D = 0. #error on parameter G0D : 0.95 interval normal law
     G0E = 0. #parameter for fitting that does not depend on e/Id
     dG0E = 0. #error on parameter G0E : 0.95 interval normal law
@@ -736,76 +739,100 @@ class Sand(Soil):
 
     def Get_hardin_drnevich_G0(s, pe, Pref = 101.325, calculate_ci=False, dpe = 0.0, de = 0.0):
         """
-        Get and set G0 using Hardin & Drnevich (1972) equations : soil parameters must be previously given. 
-        pe is effective stress in the same unit as Pref (default is kPa)
-        Returned modulus is in MPA
-        If calculate_ci is True, returns value, min, max. Uses the ci on parameters defined before
-        Supposes that highers error bound given by pe+dpe and lower by pe-dpe
+        Small strain shear modulus G0, Hardin & Drnevich (1972) type expression with
+        dimensionless parameters G0A, G0B, G0C of the soil class and the void ratio s.e:
+        G0 = G0A Pref (G0B - e)^2/(1 + e) (p'/Pref)^G0C.
+
+        Parameters
+        ----------
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa).
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+        calculate_ci : bool, optional
+            If True, also return the bounds of G0 over the parameter intervals
+            (half-widths dG0A, dG0B, dG0C of the soil class, 0 if not given) (default False).
+        dpe : float or np.ndarray, optional
+            Half-width of the uncertainty on pe (default 0).
+        de : float, optional
+            Half-width of the uncertainty on s.e (default 0).
+
+        Returns
+        -------
+        float or np.ndarray
+            G0 in the unit of Pref (kPa by default) if calculate_ci is False.
+        tuple (value, mini, maxi)
+            If calculate_ci is True: G0 and its lower and upper bounds, from every combination
+            of the interval bounds of G0A, G0B, G0C, e and pe.
         """
-        # Pref usually taken as atmospheric pressure
-        value = s.G0A*(s.G0B-s.e)**2/(1+s.e)*(pe/Pref)**s.G0C 
-        if calculate_ci==False:
-            return  value
-        else:
-            ci_g0a = [s.G0A-s.dG0A, s.G0A+s.dG0A]
-            ci_g0b = [s.G0B-s.dG0B, s.G0B+s.dG0B]
-            ci_g0c = [s.G0C-s.dG0C, s.G0C+s.dG0C]
-            ci_e = [s.e-de, s.e+de]
-            ci_pe = [pe-dpe, pe+dpe]
-            g0as = np.zeros((2**5), dtype = float)
-            g0bs = np.zeros((2**5), dtype = float)
-            g0cs = np.zeros((2**5), dtype = float)
-            pes = np.zeros((2**5), dtype = float)
-            es = np.zeros((2**5), dtype = float)
-            counter = 0
-            for i, ga in enumerate(ci_g0a):
-                for j, gb in enumerate(ci_g0b):
-                    for k, gc in enumerate(ci_g0c):
-                        for l, e in enumerate(ci_e):
-                            for m, pe in enumerate(ci_pe):
-                                g0as[counter]=ga
-                                g0bs[counter]=gb
-                                g0cs[counter]=gc
-                                es[counter]=e
-                                pes[counter]=pe
-                                counter+=1
-            values = g0as*(g0bs-es)**2/(1+es)*(pes/Pref)**g0cs 
-            mini = np.nanmin(values, axis = 0)
-            maxi = np.nanmax(values, axis = 0)
-            return value, mini, maxi
-        
+        e = np.asarray(s.e, dtype=float)  # void ratio
+        pe = np.asarray(pe, dtype=float)  # mean effective stress
+
+        def model(G0A, G0B, G0C, e, pe):
+            # Hardin & Drnevich (1972) type expression: G0 = G0A Pref (G0B - e)^2/(1 + e) (p'/Pref)^G0C
+            return G0A*Pref*(G0B-e)**2/(1+e)*(pe/Pref)**G0C
+
+        value = model(s.G0A, s.G0B, s.G0C, e, pe)  # small strain shear modulus [unit of Pref]
+        if not calculate_ci:
+            return value
+        mini, maxi = _Get_corner_bounds(model, [s.G0A, s.G0B, s.G0C, e, pe],
+                                        [s.dG0A, s.dG0B, s.dG0C, de, dpe])  # bounds of G0 [unit of Pref]
+        return value, mini, maxi
+
     def Get_fitted_G0(s, pe, Pref = 101.325, calculate_ci = False, dpe = 0):
         """
-        Get and set G0 using simplified Hardin & Drnevich (1972) equations that does not depend on void ratio: soil parameters must be previously given. 
-        pe is effective stress in the same unit as Pref (default is kPa)
-        Returned modulus is in MPA
-        If calculate_ci is True, returns value, min, max. Uses the ci on parameters defined before
-        Supposes that highers error bound given by pe+dpe and lower by pe-dpe
+        Small strain shear modulus G0, power law of the pressure only (no effect of void ratio),
+        with dimensionless parameters G0D, G0E of the soil class: G0 = G0D Pref (p'/Pref)^G0E.
+
+        Parameters
+        ----------
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa).
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+        calculate_ci : bool, optional
+            If True, also return the bounds of G0 over the parameter intervals
+            (half-widths dG0D, dG0E of the soil class) (default False).
+        dpe : float or np.ndarray, optional
+            Half-width of the uncertainty on pe (default 0).
+
+        Returns
+        -------
+        float or np.ndarray
+            G0 in the unit of Pref (kPa by default) if calculate_ci is False.
+        np.ndarray
+            If calculate_ci is True: [value, mini, maxi] stacked on the first axis.
         """
-        #tested and validated with error calculation
-        # Pref usually taken as atmospheric pressure
-        value = s.G0D*(pe/Pref)**s.G0E 
-        if calculate_ci==False:
-            return  value
-        else:
-            cis = np.array([[s.G0D-s.dG0D, s.G0D+s.dG0D], [s.G0E-s.dG0E, s.G0E+s.dG0E]], dtype = float)
-            combs = np.zeros((2**cis.shape[0], 2), dtype = float)
-            counter = 0
-            for i, ga in enumerate(cis[0, :]):
-                for k, gc in enumerate(cis[1, :]):
-                    combs[counter, :] = [ga, gc]
-                    counter+=1
-            params_ones = np.ones_like(combs[:, 0], dtype = float)
-            maxi = np.nanmax(combs[:, 0]*np.outer(((pe+dpe)/Pref), params_ones)**combs[:, 1], axis = 1)
-            mini = np.nanmin(combs[:, 0]*np.outer(((pe-dpe)/Pref), params_ones)**combs[:, 1], axis = 1)
-            return np.array([value, mini, maxi], dtype = float)
-        
+        pe = np.asarray(pe, dtype=float)  # mean effective stress
+
+        def model(G0D, G0E, pe):
+            # Power law: G0 = G0D Pref (p'/Pref)^G0E
+            return G0D*Pref*(pe/Pref)**G0E
+
+        value = model(s.G0D, s.G0E, pe)  # small strain shear modulus [unit of Pref]
+        if not calculate_ci:
+            return value
+        mini, maxi = _Get_corner_bounds(model, [s.G0D, s.G0E, pe], [s.dG0D, s.dG0E, dpe])  # bounds of G0 [unit of Pref]
+        return np.array([value, mini, maxi], dtype = float)
 
     def Get_G0_menq(s, pe, Pref = 101.325):
         """
-        Returns G0 estimated using Menq (2003) correlations in MPA\n
-        -D50 : median grain diameter in mm
+        Small strain shear modulus G0 from the Menq (2003) correlation. Unlike
+        Get_hardin_drnevich_G0, the result is in MPa (published constant 67.1 MPa).
+
+        Parameters
+        ----------
+        pe : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa).
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+
+        Returns
+        -------
+        float or np.ndarray
+            G0 in MPa. Uses s.Cu (uniformity coefficient), s.D50 (median grain size, mm) and s.e.
         """
+        # Menq (2003): G0 = 67.1 Cu^-0.2 e^(-1-(D50/20)^0.75) (p'/Pref)^(0.48 Cu^0.09), in MPa
         return 67.1*s.Cu**(-0.2)*s.e**(-1-(s.D50/20)**0.75)*(pe/Pref)**(0.48*s.Cu**0.09)
     
 
@@ -999,11 +1026,24 @@ class Sand(Soil):
     
     def Get_P2Psand_G0(s, Id, peff, Pref = 101.325):
         """
-        Returns small strain shear modulus using expression from P2Psand soil model
-        Needs parameters Cdr, g0 and Cp2p to be defined in corresponding sand class
-        requires density index (not in percentage) and effective pressure, 
-        By default, provide effective pressure in kPa and get modulus in MPa 
+        Small strain shear modulus from the P2PSand model expression, with the parameters
+        g0 (dimensionless), Cdr and Cp2p of the soil class: G0 = g0 (Id + Cdr) Pref (p'/Pref)^Cp2p.
+
+        Parameters
+        ----------
+        Id : float or np.ndarray
+            Density index [-] (not in percent).
+        peff : float or np.ndarray
+            Mean effective stress p', same unit as Pref (default kPa).
+        Pref : float, optional
+            Reference pressure (default atmospheric pressure, 101.325 kPa).
+
+        Returns
+        -------
+        float or np.ndarray
+            G0 in the unit of Pref (kPa by default).
         """
+        # P2PSand: G0 = g0 (Id + Cdr) Pref (p'/Pref)^Cp2p
         return s.g0*(Id+s.Cdr)*Pref*(peff/Pref)**s.Cp2p
     
     def Get_stress_ratio_from_friction(s, friction, compression = True, calculate_ci=False, ciM = [0,0]):
@@ -1094,14 +1134,14 @@ class NE34(Sand):
     Ks = 3.7e10 # Bulk modulus grains : Subramaniyanet al. 2015 (for Fontainebleau sandstone)
     data_origin = "Flood-Page et al. (2022)"  # origin of the data
     D50 = 0.223 #Andria-Ntoanina (2011)
-    G0A = 132.98 #saturated be tests
-    dG0A = 4.27 #saturated be tests
+    G0A = 1312.41 #saturated be tests (fitted 132.98 MPa, x1000/101.325 : dimensionless since v0.5.1)
+    dG0A = 42.14 #saturated be tests (fitted 4.27 MPa, x1000/101.325)
     G0B = 1.93 #saturated be tests
     dG0B = 0.021 #saturated be tests
     G0C = 0.44 #saturated be tests
     dG0C = 0.02 #saturated be tests
-    G0D = 99.98 #parameter for fitting that does not depend on e/Id
-    dG0D = 0.26 #error on parameter G0D : 0.95 interval normal law
+    G0D = 986.73 #parameter for fitting that does not depend on e/Id (fitted 99.98 MPa, x1000/101.325 : dimensionless since v0.5.1)
+    dG0D = 2.57 #error on parameter G0D : 0.95 interval normal law (fitted 0.26 MPa, x1000/101.325)
     G0E = 0.52 #parameter for fitting that does not depend on e/Id
     dG0E = 0.005 #error on parameter G0E : 0.95 interval normal law
     Cu = 1.5 #andria
@@ -1195,7 +1235,7 @@ class Toyoura(Sand):
     nb = 0.077
     D50 = 0.185 #kido et al. (2020) 0.216 #gu et al. (2013)
     Cu = 1.6 #Kido et al. (2020)
-    G0A = 95.5 #kPa, from Gu et al. (2013)
+    G0A = 942.51 #Gu et al. (2013) value 95.5 MPa, x1000/101.325 : dimensionless since v0.5.1
     G0B = 2.17 #Gu et al. (2013)
     G0C = 0.41 # Gu et al. (2013)
     # def Reset(s):
@@ -1216,7 +1256,7 @@ class Karlsruhe_fine_sand(Sand):
         Sand.__Init__(s, name)
 
     # small strain parameters from Wichtmann, T., Fuentes, W. & Triantafyllidis, T. Inspection of three sophisticated constitutive models based on monotonic and cyclic tests on fine sand: Hypoplasticity vs. Sanisand vs. ISA. Soil Dynamics and Earthquake Engineering 124, 172–183 (2019).
-    G0A = 150.0
+    G0A = 150.0 #dimensionless (DM04 g0 of Wichtmann et al. 2019)
     G0B = 2.97
     G0C = 0.5 
     emax = 1.054  # Max1void index 
@@ -1269,8 +1309,8 @@ class HostunRF(Sand):
     poisson = 0.196 #from correlation used in P2Psand  0.18  # from Azeiteiro et al. 2017
     Ks = 3.7e10 # Bulk modulus grains : Subramaniyanet al. 2015 (for Fontainebleau sandstone)
     Cu = 1.57 #Benahmed 2001
-    G0A = 21.46 #data afrom Azeiteiro, GFP fit
-    dG0A = 0.67 #data afrom Azeiteiro, GFP fit
+    G0A = 211.79 #data afrom Azeiteiro, GFP fit (fitted 21.46 MPa, x1000/101.325 : dimensionless since v0.5.1)
+    dG0A = 6.61 #data afrom Azeiteiro, GFP fit (fitted 0.67 MPa, x1000/101.325)
     G0B = 3.39 #data afrom Azeiteiro, GFP fit
     dG0B = 0.042 #data afrom Azeiteiro, GFP fit
     G0C = 0.49 #data afrom Azeiteiro, GFP fit

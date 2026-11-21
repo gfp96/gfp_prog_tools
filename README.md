@@ -17,7 +17,7 @@ pip install -e %USERPROFILE%\gfp_prog_tools
 Anywhere else, or as a dependency in a project's `requirements.txt`, pin a version tag:
 
 ```
-gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.0
+gfp_prog_tools @ git+https://github.com/gfp96/gfp_prog_tools.git@v0.5.1
 ```
 
 ## Claude Code conventions
@@ -27,6 +27,20 @@ Copy it to `%USERPROFILE%\.claude\CLAUDE.md` on each computer so it applies in e
 (append it if that file already exists).
 
 ## Versions
+
+### v0.5.1
+
+`soils`: small strain shear modulus G0 in the unit of Pref. Breaking change for G0 values.
+
+- `Get_hardin_drnevich_G0`: G0 = G0A Pref (G0B - e)^2/(1 + e) (p'/Pref)^G0C, and `Get_fitted_G0`:
+  G0 = G0D Pref (p'/Pref)^G0E, now return G0 in the unit of Pref (kPa by default) instead of MPa.
+  G0A and G0D are dimensionless; stored values rescaled by 1000/101.325 so that G0 is unchanged:
+  NE34 G0A 132.98 -> 1312.41 (dG0A 4.27 -> 42.14), G0D 99.98 -> 986.73 (dG0D 0.26 -> 2.57);
+  Toyoura G0A 95.5 -> 942.51; HostunRF G0A 21.46 -> 211.79 (dG0A 0.67 -> 6.61).
+  Karlsruhe_fine_sand G0A = 150 was already dimensionless (DM04 g0): its G0 drops from ~10x too high to the intended value.
+- `calculate_ci=True` of both G0 methods: works with array `pe`; `Sand` defines `dG0A`, `dG0B`, `dG0C` = 0,
+  so soils without stored uncertainties no longer raise AttributeError.
+- Docstrings: `Get_P2Psand_G0` returns the unit of Pref (not MPa); `Get_G0_menq` returns MPa.
 
 ### v0.5.0
 
